@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get the real path to the script, regardless of where it's called from
-SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 # Define paths relative to HOME
@@ -95,7 +95,7 @@ generate_expect_script() {
     
     mkdir -p "$SCRIPTS_DIR"
     cat > "$SCRIPTS_DIR/$alias.exp" <<EOF
-#!/usr/bin/expect -f
+#!/usr/bin/env expect
 set timeout 30
 
 # Store command line arguments
@@ -144,7 +144,7 @@ show_site() {
         'Username: ' || username,
         'Password: ' || '$password',
         'Working Directory: ' || working_dir 
-        FROM sites WHERE alias='$alias';" | sed 's/|/\n/g'
+        FROM sites WHERE alias='$alias';" | tr '|' '\n'
 }
 
 update_aliases() {

@@ -1,8 +1,9 @@
 #!/bin/bash
 
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/ssh-site-manager"
+
 # Create sites command in /usr/local/bin
-sudo ln -sf "$(readlink -f sites-manager.sh)" /usr/local/bin/sites
-sudo chmod +x /usr/local/bin/sites
+sudo ln -sf "$SCRIPT_PATH" /usr/local/bin/sites
 
 # Create required directories
 mkdir -p "$HOME/.sites/scripts"
