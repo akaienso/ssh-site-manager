@@ -1,0 +1,255 @@
+#!/bin/bash
+
+# Get the real path to the script, regardless of where it's called from
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# Define paths relative to HOME
+DB_FILE="$HOME/.sites/credentials.db"
+KEY_FILE="$HOME/.sites/encryption.key"
+SCRIPTS_DIR="$HOME/.sites/scripts"
+
+if [ ! -f "$KEY_FILE" ]; then
+    mkdir -p "$(dirname "$KEY_FILE")"
+    openssl rand -base64 32 > "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+fi
+
+init_db() {
+    mkdir -p "$(dirname "$DB_FILE")"
+    sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS sites (alias TEXT PRIMARY KEY, hostname TEXT NOT NULL, username TEXT NOT NULL, encrypted_password TEXT NOT NULL, working_dir TEXT NOT NULL);"
+    chmod 600 "$DB_FILE"
+}
+
+encrypt_password() {
+    local password=$1
+    echo "$password" | openssl enc -aes-256-cbc -a -salt -pass file:"$KEY_FILE" 2>/dev/null
+}
+
+decrypt_password() {
+    local encrypted=$1
+    echo "$encrypted" | openssl enc -aes-256-cbc -a -d -salt -pass file:"$KEY_FILE" 2>/dev/null
+}
+
+export_csv() {
+    echo "alias,hostname,username,working_dir" > sites_export.csv
+    sqlite3 "$DB_FILE" "SELECT alias, hostname, username, working_dir FROM sites;" | sed 's/|/,/g' >> sites_export.csv
+    echo "Exported to sites_export.csv"
+    
+    # Export passwords separately for security
+    echo "alias,password" > sites_passwords.csv
+    sqlite3 "$DB_FILE" "SELECT alias, encrypted_password FROM sites;" | while IFS='|' read -r alias encrypted; do
+        password=$(decrypt_password "$encrypted")
+        echo "$alias,$password" >> sites_passwords.csv
+    done
+    echo "Passwords exported to sites_passwords.csv"
+}
+
+import_csv() {
+    local sites_file=$1
+    
+    if [[ ! -f "$sites_file" ]]; then
+        echo "Error: CSV file not found"
+        return 1
+    fi
+    
+    # Skip header line and process
+    tail -n +2 "$sites_file" | while IFS=',' read -r alias hostname username password working_dir; do
+        add_site "$alias" "$hostname" "$username" "$password" "$working_dir" "silent"
+    done
+    
+    update_aliases
+    echo "Import complete"
+}
+
+# Modify add_site to accept silent mode
+add_site() {
+    local alias=$1
+    local hostname=$2
+    local username=$3
+    local password=$4
+    local working_dir=$5
+    local silent=$6
+
+    if [[ -z "$silent" ]] && sqlite3 "$DB_FILE" "SELECT 1 FROM sites WHERE alias='$alias'" | grep -q 1; then
+        read -p "Site '$alias' already exists. Modify? (y/N): " confirm
+        [[ $confirm != [yY] ]] && return 1
+    fi
+    
+    local encrypted=$(encrypt_password "$password")
+    
+    sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO sites (alias, hostname, username, encrypted_password, working_dir) VALUES ('$alias', '$hostname', '$username', '$encrypted', '$working_dir');"
+    
+    generate_expect_script "$alias"
+}
+
+generate_expect_script() {
+    local alias=$1
+    
+    local hostname=$(sqlite3 "$DB_FILE" "SELECT hostname FROM sites WHERE alias='$alias';")
+    local username=$(sqlite3 "$DB_FILE" "SELECT username FROM sites WHERE alias='$alias';")
+    local encrypted=$(sqlite3 "$DB_FILE" "SELECT encrypted_password FROM sites WHERE alias='$alias';")
+    local working_dir=$(sqlite3 "$DB_FILE" "SELECT working_dir FROM sites WHERE alias='$alias';")
+    
+    local password=$(decrypt_password "$encrypted")
+    
+    mkdir -p "$SCRIPTS_DIR"
+    cat > "$SCRIPTS_DIR/$alias.exp" <<EOF
+#!/usr/bin/expect -f
+set timeout 30
+
+# Store command line arguments
+set args [lrange \$argv 0 end]
+
+spawn ssh $username@$hostname
+expect "password:"
+send "$password\r"
+expect "$ "
+
+# Only try to cd if no arguments were provided
+if {\$args == ""} {
+    send "cd '$working_dir' || echo 'Failed to change directory'\r"
+    expect "$ "
+}
+
+interact
+EOF
+    chmod 700 "$SCRIPTS_DIR/$alias.exp"
+}
+
+delete_site() {
+    local alias=$1
+    sqlite3 "$DB_FILE" "DELETE FROM sites WHERE alias='$alias';"
+    rm -f "$SCRIPTS_DIR/$alias.exp"
+}
+
+list_sites() {
+    sqlite3 "$DB_FILE" "SELECT alias FROM sites ORDER BY alias ASC;" | column
+}
+
+show_site() {
+    local alias=$1
+    
+    if [[ -z "$alias" ]]; then
+        echo "Error: Alias required"
+        return 1
+    fi
+    
+    echo "Details for $alias:"
+    local encrypted_pass=$(sqlite3 "$DB_FILE" "SELECT encrypted_password FROM sites WHERE alias='$alias';")
+    local password=$(decrypt_password "$encrypted_pass")
+    
+    sqlite3 "$DB_FILE" "SELECT 
+        'Hostname: ' || hostname,
+        'Username: ' || username,
+        'Password: ' || '$password',
+        'Working Directory: ' || working_dir 
+        FROM sites WHERE alias='$alias';" | sed 's/|/\n/g'
+}
+
+update_aliases() {
+    local alias_file="$HOME/.sites/aliases"
+    mkdir -p "$(dirname "$alias_file")"
+    
+    # Create aliases file
+    echo "# Site SSH aliases" > "$alias_file"
+    sqlite3 "$DB_FILE" "SELECT alias FROM sites;" | while read -r alias; do
+        echo "alias $alias='expect \"$SCRIPTS_DIR/$alias.exp\" \"\$@\"'" >> "$alias_file"
+    done
+    
+    # Add source line to .bash_aliases if it doesn't exist
+    if [ ! -f "$HOME/.bash_aliases" ]; then
+        touch "$HOME/.bash_aliases"
+    fi
+    
+    grep -q "source ~/.sites/aliases" "$HOME/.bash_aliases" || echo "source ~/.sites/aliases" >> "$HOME/.bash_aliases"
+    
+    # Source the aliases file
+    source "$alias_file"
+}
+
+show_help() {
+    cat << EOF
+SSH Site Manager - Usage:
+
+  ./sites-manager.sh <command> [options]
+
+Commands:
+  init              Initialize the database
+  add              Add or update a site
+                   ./sites-manager.sh add <alias> <hostname> <username> <password> <working_dir>
+  delete           Remove a site
+                   ./sites-manager.sh delete <alias>
+  list             Show all site aliases
+  show             Show details for specific site
+                   ./sites-manager.sh show <alias>
+  update           Update and source aliases for all sites
+  export           Export all sites to sites_export.csv
+  import           Import sites from CSV file
+                   ./sites-manager.sh import <sites_csv>
+
+Example:
+  ./sites-manager.sh add mysite example.com user_123 'password123' /var/www/html
+  source ~/.sites/aliases
+  mysite           # Connect to the site
+
+CSV Format:
+  Export creates sites_export.csv with format:
+    alias,hostname,username,password,working_dir
+  
+  Example CSV content:
+    site1,example.com,user1,pass123,/var/www/html
+    site2,example.org,user2,pass456,/home/user2/public_html
+
+  Create a CSV file in this format to import multiple sites at once.
+
+Files:
+  ~/.sites/credentials.db   Site information database
+  ~/.sites/encryption.key   Password encryption key
+  ~/.sites/scripts/         Expect scripts directory
+  ~/.sites/aliases         Generated aliases file
+EOF
+}
+
+case "$1" in
+    "--help"|"-h")
+        show_help
+        ;;
+    "init")
+        init_db
+        ;;
+    "add")
+        if [[ ! -f "$DB_FILE" ]]; then
+            echo "Database not initialized. Running init..."
+            init_db
+        fi
+        add_site "$2" "$3" "$4" "$5" "$6"
+        update_aliases
+        ;;
+    "delete")
+        delete_site "$2"
+        update_aliases
+        ;;
+    "list")
+        list_sites
+        ;;
+    "show")
+        show_site "$2"
+        ;;
+    "update")
+        update_aliases
+        ;;
+    "export")
+        export_csv
+        ;;
+    "import")
+        if [[ ! -f "$DB_FILE" ]]; then
+            echo "Database not initialized. Running init..."
+            init_db
+        fi
+        import_csv "$2"
+        ;;
+    *)
+        show_help
+        ;;
+esac
