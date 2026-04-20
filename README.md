@@ -1,5 +1,12 @@
 # SSH Site Manager
 
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL-blue)
+![Shell](https://img.shields.io/badge/shell-bash%204%2B-4EAA25?logo=gnubash&logoColor=white)
+![SQLite](https://img.shields.io/badge/database-SQLite3-003B57?logo=sqlite&logoColor=white)
+![OpenSSL](https://img.shields.io/badge/encryption-AES--256--CBC-721412?logo=openssl&logoColor=white)
+![Expect](https://img.shields.io/badge/automation-expect-orange)
+![Auth](https://img.shields.io/badge/auth-password-lightgrey)
+
 A command-line tool for managing SSH connections to multiple sites. Credentials are stored in an encrypted local SQLite database and each site gets a short shell alias so you can connect with a single word.
 
 ---
