@@ -114,7 +114,7 @@ To have aliases available in every new terminal, add the following to your `~/.b
 [ -f ~/.sites/aliases ] && source ~/.sites/aliases
 ```
 
-> **Note:** `sites add` and `sites update` automatically append a `source ~/.sites/aliases` line to `~/.bash_aliases`. This covers bash login shells; zsh users should add the line above manually.
+> **Note:** `sites add` and `sites update` automatically append a `source ~/.sites/aliases` line to your shell config file (`~/.zshrc` on zsh, `~/.bash_profile` on bash). Open a new terminal — or run `source ~/.zshrc` / `source ~/.bash_profile` — to pick up the change in your current session.
 
 Then connect using the alias:
 
@@ -175,13 +175,30 @@ Keep `sites_passwords.csv` secure and delete it when no longer needed.
 sites import <sites_csv>
 ```
 
-The CSV must have the following format (header row required):
+The importer accepts two formats:
+
+**Combined format** (single file, header row required):
 
 ```
 alias,hostname,username,password,working_dir
 mysite,example.com,deploy,p@ssw0rd!,/var/www/html
 staging,staging.example.com,admin,hunter2,/home/admin
 ```
+
+**Split format** (the two files produced by `sites export`):
+
+```bash
+sites import sites_export.csv
+# automatically looks for sites_passwords.csv in the same directory
+```
+
+If the passwords file has a different name or lives elsewhere, pass it explicitly:
+
+```bash
+sites import sites_export.csv /path/to/sites_passwords.csv
+```
+
+The format is detected automatically from the header row.
 
 ---
 
@@ -241,4 +258,4 @@ shellcheck install.sh
 - **Passwords with single quotes** — `show_site` interpolates the decrypted password directly into a SQL string. A password containing `'` will break the query. The same issue exists in `add_site`'s duplicate-check query for aliases.
 - **No SSH key support** — the tool only handles password authentication. Sites that use key-based auth cannot be added.
 - **Prompt matching** — the expect scripts wait for `"$ "` as the shell prompt. Non-standard prompts (e.g. those with colour codes, or prompts not ending in `$ `) will cause the connection to hang.
-- **zsh aliases** — `update_aliases` sources into bash via `~/.bash_aliases`; zsh users must manually source `~/.sites/aliases` from their `~/.zshrc`.
+- **Shell detection** — `update_aliases` detects the shell via `$SHELL` and writes to `~/.zshrc`, `~/.bash_profile`, or `~/.profile`. If your shell config lives elsewhere, add `source ~/.sites/aliases` to it manually.

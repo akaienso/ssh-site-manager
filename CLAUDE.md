@@ -12,13 +12,15 @@ A single-file bash CLI (`ssh-site-manager`) that stores SSH credentials in a loc
 
 1. `add` → encrypts password with key at `~/.sites/encryption.key` → stores in SQLite → calls `generate_expect_script`
 2. `generate_expect_script` → writes `~/.sites/scripts/<alias>.exp` (an expect script that spawns ssh, sends the password, and optionally `cd`s to `working_dir`)
-3. `update_aliases` → writes `~/.sites/aliases` (one shell alias per site pointing at the expect script) → appends `source ~/.sites/aliases` to `~/.bash_aliases`
+3. `update_aliases` → writes `~/.sites/aliases` (one shell alias per site pointing at the expect script) → appends `source ~/.sites/aliases` to the appropriate shell config file (`~/.zshrc` for zsh, `~/.bash_profile` for bash, `~/.profile` otherwise), detected via `$SHELL`
 
 ## Key constraints
 
 - The script relies on `openssl`, `sqlite3`, and `expect` being present — no package management or dependency checks beyond that.
 - Passwords are stored in expect scripts **in plaintext** after decryption — the security boundary is file permissions (700 on `.exp` files, 600 on the DB and key).
 - The `show_site` function embeds the decrypted password directly in a SQL string, which would break if the password contains a single quote.
+- macOS ships with bash 3.2 which does not support associative arrays (`declare -A`) — avoid them anywhere in the script.
+- `import_csv` handles two export formats: a combined CSV (`alias,hostname,username,password,working_dir`) and the legacy split format (`sites_export.csv` + `sites_passwords.csv`). Format is detected by checking whether the header contains the word `password`.
 
 ## Running / testing manually
 

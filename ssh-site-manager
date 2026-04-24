@@ -47,17 +47,37 @@ export_csv() {
 
 import_csv() {
     local sites_file=$1
-    
+    local passwords_file=$2
+
     if [[ ! -f "$sites_file" ]]; then
-        echo "Error: CSV file not found"
+        echo "Error: Sites CSV file not found"
         return 1
     fi
-    
-    # Skip header line and process
-    tail -n +2 "$sites_file" | while IFS=',' read -r alias hostname username password working_dir; do
-        add_site "$alias" "$hostname" "$username" "$password" "$working_dir" "silent"
-    done
-    
+
+    local header
+    header=$(head -1 "$sites_file")
+
+    if echo "$header" | grep -q "password"; then
+        # Combined format: alias,hostname,username,password,working_dir
+        tail -n +2 "$sites_file" | while IFS=',' read -r alias hostname username password working_dir; do
+            add_site "$alias" "$hostname" "$username" "$password" "$working_dir" "silent"
+        done
+    else
+        # Split format: sites file has no password column — need passwords file
+        if [[ -z "$passwords_file" ]]; then
+            passwords_file="$(dirname "$sites_file")/sites_passwords.csv"
+        fi
+        if [[ ! -f "$passwords_file" ]]; then
+            echo "Error: Passwords file not found. Expected '$passwords_file' or pass it as a second argument."
+            return 1
+        fi
+        tail -n +2 "$sites_file" | while IFS=',' read -r alias hostname username working_dir; do
+            local password
+            password=$(grep "^$alias," "$passwords_file" | head -1 | cut -d',' -f2)
+            add_site "$alias" "$hostname" "$username" "$password" "$working_dir" "silent"
+        done
+    fi
+
     update_aliases
     echo "Import complete"
 }
@@ -157,12 +177,18 @@ update_aliases() {
         echo "alias $alias='expect \"$SCRIPTS_DIR/$alias.exp\" \"\$@\"'" >> "$alias_file"
     done
     
-    # Add source line to .bash_aliases if it doesn't exist
-    if [ ! -f "$HOME/.bash_aliases" ]; then
-        touch "$HOME/.bash_aliases"
-    fi
-    
-    grep -q "source ~/.sites/aliases" "$HOME/.bash_aliases" || echo "source ~/.sites/aliases" >> "$HOME/.bash_aliases"
+    # Determine shell config file based on current shell
+    local shell_name
+    shell_name=$(basename "$SHELL")
+    local shell_rc
+    case "$shell_name" in
+        zsh)  shell_rc="$HOME/.zshrc" ;;
+        bash) shell_rc="$HOME/.bash_profile" ;;
+        *)    shell_rc="$HOME/.profile" ;;
+    esac
+
+    touch "$shell_rc"
+    grep -q "source ~/.sites/aliases" "$shell_rc" || echo "source ~/.sites/aliases" >> "$shell_rc"
     
     # Source the aliases file
     source "$alias_file"
@@ -186,7 +212,9 @@ Commands:
   update           Update and source aliases for all sites
   export           Export all sites to sites_export.csv
   import           Import sites from CSV file
-                   ./sites-manager.sh import <sites_csv>
+                   ./sites-manager.sh import <sites_csv> [passwords_csv]
+                   Accepts a combined export or the split sites_export.csv + sites_passwords.csv pair.
+                   If only sites_export.csv is given, looks for sites_passwords.csv in the same directory.
 
 Example:
   ./sites-manager.sh add mysite example.com user_123 'password123' /var/www/html
@@ -247,7 +275,7 @@ case "$1" in
             echo "Database not initialized. Running init..."
             init_db
         fi
-        import_csv "$2"
+        import_csv "$2" "$3"
         ;;
     *)
         show_help
